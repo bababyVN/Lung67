@@ -1,8 +1,16 @@
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import gradio as gr
 import torch.nn.functional as F
 import albumentations as A
 # Safely import only the required class
-from design.pipeline import Pipeline 
+from utils.pipeline import Pipeline 
 import os
 os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 
@@ -18,7 +26,7 @@ def get_css(css_path):
         return "" 
 
 def create_interface():
-    custom = get_css('design/design.css') 
+    custom = get_css('demo/design.css') 
     processor = Pipeline()
 
     with gr.Blocks(css=custom, theme=gr.themes.Soft(primary_hue='teal', secondary_hue='blue')) as interface:
