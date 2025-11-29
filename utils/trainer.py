@@ -126,7 +126,7 @@ if __name__ == "__main__":
 
     # Only run segmentation models as requested
     models_to_train = {
-        "classification": [],
+        "classification": ["ResNet50", "ResNet18", "VGG16", "VGG19"],
         "segmentation": ["ResNetUnet", "AttentionUNet", "R2Unet", "R2AttUnet"]
     }
 
