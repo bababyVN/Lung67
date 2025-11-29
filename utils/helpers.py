@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
 import torch.nn as nn
+import torchvision.models as models
 import time
 from tqdm.auto import tqdm
 # Some constants
@@ -151,21 +152,36 @@ def get_class_model(name):
     try:
         if name_lower in ["resnet18", "resnet50", "vgg16", "vgg19"]:
             print(f"Loading IMAGENET1K_V1 weights for {name}...")
-            # Use torch.hub to safely load the pre-trained weights for the model architecture
-            if "resnet" in name_lower:
-                pretrained_model = torch.hub.load('pytorch/vision:v0.10.0', name_lower, weights="IMAGENET1K_V1")
-            elif "vgg" in name_lower:
-                 # VGG model names need to be adjusted for torch.hub (e.g., vgg16_bn)
-                 hub_name = name_lower + "_bn" if "vgg" in name_lower else name_lower
-                 pretrained_model = torch.hub.load('pytorch/vision:v0.10.0', hub_name, weights="IMAGENET1K_V1")
+            # Use torchvision.models directly to avoid namespace conflicts
+            try:
+                # Try new API with weights parameter (torchvision >= 0.13)
+                if name_lower == "resnet18":
+                    pretrained_model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+                elif name_lower == "resnet50":
+                    pretrained_model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+                elif name_lower == "vgg16":
+                    pretrained_model = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
+                elif name_lower == "vgg19":
+                    pretrained_model = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
+            except (AttributeError, TypeError):
+                # Fallback to old API with pretrained parameter (torchvision < 0.13)
+                if name_lower == "resnet18":
+                    pretrained_model = models.resnet18(pretrained=True)
+                elif name_lower == "resnet50":
+                    pretrained_model = models.resnet50(pretrained=True)
+                elif name_lower == "vgg16":
+                    pretrained_model = models.vgg16(pretrained=True)
+                elif name_lower == "vgg19":
+                    pretrained_model = models.vgg19(pretrained=True)
 
             # Load the state dict, ignoring the final classification layer (which has 1000 output features)
             # The 'strict=False' is used because the final layer sizes will mismatch (1000 vs 3)
             model.load_state_dict(pretrained_model.state_dict(), strict=False)
             del pretrained_model
+            print(f"✅ Successfully loaded pre-trained weights for {name}")
         
     except Exception as e:
-        print(f"⚠️ Could not load pre-trained weights for {name} from PyTorch Hub: {e}. Model will train from scratch.")
+        print(f"⚠️ Could not load pre-trained weights for {name} from torchvision: {e}. Model will train from scratch.")
 
 
     # 4. Replace the final layer with one suitable for 3 classes and add Dropout
