@@ -12,6 +12,10 @@ from PIL import Image
 import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
+import torch
+import torch.nn as nn
+import time
+from tqdm.auto import tqdm
 # Some constants
 DATA_ROOT = "dataset"
 CLASSES = ['COVID', 'Healthy', 'Non-COVID']
@@ -100,3 +104,195 @@ def visualize_image_mask_pairs(n_samples:int=3, classes:list[str]=CLASSES, data_
     
     plt.tight_layout()
     plt.show()
+    
+# --- Model Definitions (With Pre-trained Weights and Dropout Fixes) ---
+def add_dropout_to_fc(model, p=0.25, classes=CLASSES):
+    """Adds a Dropout layer before the final classification layer for regularization."""
+    if hasattr(model, 'fc'):
+        # Standard for ResNets
+        num_features = model.fc.in_features
+        model.fc = nn.Sequential(
+            nn.Dropout(p=p),
+            nn.Linear(num_features, len(classes))
+        )
+    elif hasattr(model, 'classifier') and isinstance(model.classifier, nn.Sequential):
+        # Standard for VGGs
+        new_classifier = list(model.classifier.children())[:-1] # Remove last layer
+        last_in_features = list(model.classifier.children())[-1].in_features
+        new_classifier.extend([
+            nn.Dropout(p=p),
+            nn.Linear(last_in_features, len(classes))
+        ])
+        model.classifier = nn.Sequential(*new_classifier)
+    return model
+
+# FIX: Modified to load pre-trained state_dict manually to bypass unsupported 'weights' argument
+def get_class_model(name):
+    from models.classification_models import ResNet, VGG
+    name_lower = name.lower()
+    
+    # 1. Get the model class function
+    if name_lower == "resnet18":
+        ModelClass = ResNet.ResNet18
+    elif name_lower == "resnet50":
+        ModelClass = ResNet.ResNet50
+    elif name_lower == "vgg16":
+        ModelClass = VGG.VGG16
+    elif name_lower == "vgg19":
+        ModelClass = VGG.VGG19
+    else:
+        raise ValueError(f"Unknown classification model: {name}")
+
+    # 2. Instantiate the model without the 'weights' argument (FIX for the error)
+    # The actual num_classes will be adjusted later by add_dropout_to_fc
+    model = ModelClass(num_classes=1000) 
+    
+    # 3. Load pre-trained weights if available (IMAGENET1K_V1)
+    try:
+        if name_lower in ["resnet18", "resnet50", "vgg16", "vgg19"]:
+            print(f"Loading IMAGENET1K_V1 weights for {name}...")
+            # Use torch.hub to safely load the pre-trained weights for the model architecture
+            if "resnet" in name_lower:
+                pretrained_model = torch.hub.load('pytorch/vision:v0.10.0', name_lower, weights="IMAGENET1K_V1")
+            elif "vgg" in name_lower:
+                 # VGG model names need to be adjusted for torch.hub (e.g., vgg16_bn)
+                 hub_name = name_lower + "_bn" if "vgg" in name_lower else name_lower
+                 pretrained_model = torch.hub.load('pytorch/vision:v0.10.0', hub_name, weights="IMAGENET1K_V1")
+
+            # Load the state dict, ignoring the final classification layer (which has 1000 output features)
+            # The 'strict=False' is used because the final layer sizes will mismatch (1000 vs 3)
+            model.load_state_dict(pretrained_model.state_dict(), strict=False)
+            del pretrained_model
+        
+    except Exception as e:
+        print(f"⚠️ Could not load pre-trained weights for {name} from PyTorch Hub: {e}. Model will train from scratch.")
+
+
+    # 4. Replace the final layer with one suitable for 3 classes and add Dropout
+    model = add_dropout_to_fc(model, p=0.25) 
+    return model
+
+def get_seg_model(name):
+    from models.segmentation_models import ResnetUnet, AttentionUNet, R2U_Net, R2AttU_Net
+    # FIX: Corrected keys to match expected class names
+    name_lower = name.lower()
+    if name_lower == "resnetunet":
+        return ResnetUnet.ResNetUnet()
+    elif name_lower == "attentionunet":
+        return AttentionUNet.AttentionUNet()
+    elif name_lower == "r2unet": 
+        return R2U_Net.R2U_Net()
+    elif name_lower == "r2attunet": 
+        return R2AttU_Net.R2AttU_Net()
+    else:
+        raise ValueError(f"Unknown segmentation model: {name}")
+    
+# [Metrics] (Unchanged)
+def acc(logits, y): return (torch.argmax(logits, 1) == y).sum().item(), y.size(0)
+
+def iou(pred, mask, t=0.5): 
+    p = (pred > t).float(); inter=(p*mask).sum(); union=((p+mask)>0).float().sum()
+    return (inter/(union+1e-7)).item()
+
+# [Training] (Includes Fine-tuning logic and updated patience)
+def train(model, train_dl, val_dl, device, epochs, lr, name, save_dir, seg=False):
+    model = model.to(device, memory_format=torch.channels_last)
+    criterion = nn.BCEWithLogitsLoss() if seg else nn.CrossEntropyLoss(label_smoothing=0.1)
+    
+    # FIX: Fine-tuning logic for pre-trained classification models (essential for high accuracy)
+    # Check if we successfully loaded pre-trained weights by seeing if any parameter is currently frozen.
+    is_pretrained = False
+    for param in model.parameters():
+        if not param.requires_grad:
+            is_pretrained = True
+            break
+
+    if not seg and is_pretrained:
+        # If pre-trained weights were loaded, we only train the newly added classification head.
+        # Ensure all layers are frozen initially
+        for param in model.parameters():
+            param.requires_grad = False
+        
+        # Unfreeze the final layer (where we applied Dropout and Linear layer)
+        if hasattr(model, 'fc'):
+            for param in model.fc.parameters():
+                param.requires_grad = True
+        elif hasattr(model, 'classifier'):
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        
+        # Optimizer only targets the trainable (unfrozen) parameters
+        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-4)
+        print(f"🎯 Fine-tuning only the classification head with LR: {lr}")
+    else:
+        # Full training for segmentation/scratch classification models
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+        print(f"🔥 Training all layers from scratch/unfrozen with LR: {lr}")
+
+    
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type=="cuda"))
+    
+    best_score = 0 if not seg else float("inf")
+    patience, patience_counter = 10, 0 
+
+    start_time = time.time()
+    for epoch in range(1, epochs+1):
+        model.train(); running_loss = correct = total = 0
+        for x, y in tqdm(train_dl, leave=False):
+            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            optimizer.zero_grad(set_to_none=True)
+            with torch.cuda.amp.autocast():
+                out = model(x)
+                if seg and out.dim()==3: out = out.unsqueeze(1)
+                loss = criterion(out, y if seg else y)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer); scaler.update()
+            running_loss += loss.item() * x.size(0)
+            if not seg:
+                preds = torch.argmax(out, 1)
+                correct += (preds == y).sum().item()
+                total += y.size(0)
+        scheduler.step()
+
+        # [VALIDATION]
+        model.eval(); val_loss = val_metric = 0
+        with torch.no_grad():
+            for x, y in val_dl:
+                x, y = x.to(device), y.to(device)
+                with torch.cuda.amp.autocast():
+                    out = model(x)
+                    if seg and out.dim()==3: out = out.unsqueeze(1)
+                    loss = criterion(out, y if seg else y)
+                val_loss += loss.item() * x.size(0)
+                if seg: val_metric += iou(torch.sigmoid(out), y)
+                else: 
+                    preds = torch.argmax(out, 1)
+                    val_metric += (preds == y).sum().item()
+
+        val_loss /= len(val_dl.dataset)
+        
+        if seg:
+            val_iou = val_metric / len(val_dl)
+            print(f"[{name}] Ep{epoch}: TrainLoss {running_loss/len(train_dl.dataset):.3f} | ValLoss {val_loss:.3f} | IoU {val_iou:.3f}")
+            improved = val_loss < best_score
+        else:
+            val_acc = 100 * val_metric / len(val_dl.dataset)
+            print(f"[{name}] Ep{epoch}: TrainLoss {running_loss/len(train_dl.dataset):.3f} | ValLoss {val_loss:.3f} | ValAcc {val_acc:.2f}%")
+            improved = val_acc > best_score
+
+        if improved:
+            best_score = val_loss if seg else val_acc
+            patience_counter = 0
+            os.makedirs(save_dir, exist_ok=True)
+            torch.save(model.state_dict(), os.path.join(save_dir, f"{name}_best.pt"))
+        else:
+            patience_counter += 1
+
+        if patience_counter >= patience:
+            print(f"⏹️ Early stopping at epoch {epoch}. Best score: {best_score:.2f}")
+            break
+    
+    end_time = time.time()
+    print(f"✅ Training for {name} finished in {(end_time - start_time) / 60:.2f} minutes.")
+    return best_score
