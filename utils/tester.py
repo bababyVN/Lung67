@@ -470,7 +470,7 @@ def print_summary(results):
     print("="*80)
     
     # Classification results
-    cls_models = [k for k in results.keys() if any(x in k for x in ["ResNet", "VGG"])]
+    cls_models = ["ResNet18", "ResNet50", "VGG16", "VGG19"]
     if cls_models:
         print("\nCLASSIFICATION MODELS:")
         print("-"*80)
@@ -487,7 +487,7 @@ def print_summary(results):
               f"(Accuracy: {results[best_cls_model]['accuracy']:.2f}%)")
     
     # Segmentation results
-    seg_models = [k for k in results.keys() if "Unet" in k or "UNet" in k]
+    seg_models = ["ResNetUnet", "AttentionUNet", "R2Unet", "R2AttUnet"]
     if seg_models:
         print("\n\nSEGMENTATION MODELS:")
         print("-"*80)
