@@ -153,7 +153,7 @@ def get_class_model(name):
             raise ValueError(f"Unknown classification model: {name}")
 
     except Exception as e:
-        print(f"❌ Error loading model {name} from PyTorch Hub: {e}. Model will train from scratch.")
+        print(f"Error loading model {name} from PyTorch Hub: {e}. Model will train from scratch.")
         # Fallback in case of network error, but we expect the architecture to be correct now.
         if "resnet" in name_lower:
             from models.classification_models import ResNet
@@ -201,7 +201,7 @@ def train(model, train_dl, val_dl, device, epochs, lr, name, save_dir, seg=False
     if seg:
         # FIX: Increased weight decay for stronger L2 regularization
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=5e-4)
-        print(f"🔥 Training Segmentation model (all layers unfrozen) with LR: {lr}")
+        print(f"Training Segmentation model (all layers unfrozen) with LR: {lr}")
         # Use CosineAnnealing for stable convergence in segmentation
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
         start_epoch = 1
@@ -256,7 +256,7 @@ def train(model, train_dl, val_dl, device, epochs, lr, name, save_dir, seg=False
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer, mode='max', factor=0.1, patience=3
             )
-            print(f"🎯 Full fine-tuning (all layers unfrozen) with very low LR: {lr}. Using ReduceLROnPlateau scheduler.")
+            print(f"Full fine-tuning (all layers unfrozen) with very low LR: {lr}. Using ReduceLROnPlateau scheduler.")
 
 
         # Standard training loop execution
@@ -341,9 +341,9 @@ def train(model, train_dl, val_dl, device, epochs, lr, name, save_dir, seg=False
             patience_counter += 1
 
         if patience_counter >= patience:
-            print(f"⏹️ Early stopping at epoch {epoch}. Best score: {best_score:.2f}")
+            print(f"Early stopping at epoch {epoch}. Best score: {best_score:.2f}")
             break
 
     end_time = time.time()
-    print(f"✅ Training for {name} finished in {(end_time - start_time) / 60:.2f} minutes.")
+    print(f"Training for {name} finished in {(end_time - start_time) / 60:.2f} minutes.")
     return best_score
