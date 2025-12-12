@@ -129,3 +129,50 @@ class SegmentationDataset(Dataset):
         return img, mask
 
     def __len__(self): return len(self.pairs)
+    
+class CLIPDataset(Dataset):
+    """
+    Dataset for CLIP classification that returns preprocessed images.
+    """
+    def __init__(self, root, processor, classes, split='train'):
+        """
+        Args:
+            root: Root directory of the dataset
+            processor: CLIPProcessor instance
+            classes: List of class names
+            split: One of 'train', 'val', or 'test'
+        """
+        self.root = root
+        self.processor = processor
+        self.classes = classes
+        
+        # Load split CSV file
+        split_csv = os.path.join(root, 'splits', f'{split}.csv')
+        if not os.path.exists(split_csv):
+            raise FileNotFoundError(f"Split file not found: {split_csv}")
+        
+        df = pd.read_csv(split_csv)
+        
+        # Build samples list
+        self.samples = []
+        for _, row in df.iterrows():
+            img_id = row['id']
+            cls = row['class']
+            label_idx = classes.index(cls)
+            img_path = os.path.join(root, cls, "images", f"{img_id}.png")
+            
+            if os.path.exists(img_path):
+                self.samples.append((img_path, label_idx))
+    
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        image = Image.open(path).convert("RGB")
+        
+        # CLIP processor handles resizing and normalization
+        inputs = self.processor(images=image, return_tensors="pt")
+        pixel_values = inputs['pixel_values'].squeeze(0)  # Remove batch dim
+        
+        return pixel_values, label
+    
+    def __len__(self):
+        return len(self.samples)
