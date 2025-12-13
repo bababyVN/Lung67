@@ -19,7 +19,7 @@ class CLIPClassifier(nn.Module):
         self,
         model_name="openai/clip-vit-base-patch32",
         num_classes=3,
-        text_prompts=None,
+        text_prompts=DEFAULT_TEXT_PROMPTS,
         device=None,
     ):
         super(CLIPClassifier, self).__init__()
@@ -36,15 +36,11 @@ class CLIPClassifier(nn.Module):
         # If text prompts provided, encode them for zero-shot classification
         if text_prompts is not None:
             with torch.no_grad():
-                text_inputs = self.processor(
-                    text=text_prompts, return_tensors="pt", padding=True
-                )
+                text_inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True)
                 text_inputs = {k: v.to(device) for k, v in text_inputs.items()}
                 text_outputs = self.clip_model.get_text_features(**text_inputs)
                 # Normalize text embeddings
-                self.text_features = text_outputs / text_outputs.norm(
-                    dim=-1, keepdim=True
-                )
+                self.text_features = text_outputs / text_outputs.norm(dim=-1, keepdim=True)
         else:
             self.text_features = None
 
@@ -82,26 +78,9 @@ class CLIPClassifier(nn.Module):
 
         return pred_class.item(), confidence.item()
 
-    def freeze_text_encoder(self):
-        """Freeze text encoder parameters."""
-        for param in self.clip_model.text_model.parameters():
-            param.requires_grad = False
-
-    def freeze_vision_encoder(self):
-        """Freeze vision encoder parameters."""
-        for param in self.clip_model.vision_model.parameters():
-            param.requires_grad = False
-
-    def unfreeze_vision_encoder(self):
-        """Unfreeze vision encoder parameters for fine-tuning."""
-        for param in self.clip_model.vision_model.parameters():
-            param.requires_grad = True
-
     def get_trainable_params(self, vision_only=True):
         if vision_only:
-            return filter(
-                lambda p: p.requires_grad, self.clip_model.vision_model.parameters()
-            )
+            return filter(lambda p: p.requires_grad, self.clip_model.vision_model.parameters())
         else:
             return filter(lambda p: p.requires_grad, self.parameters())
 
