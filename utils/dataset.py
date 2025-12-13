@@ -8,6 +8,7 @@ if str(PROJECT_ROOT) not in sys.path:
     
 from tqdm.auto import tqdm
 from PIL import Image
+import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 import glob
 import pandas as pd
@@ -176,3 +177,72 @@ class CLIPDataset(Dataset):
     
     def __len__(self):
         return len(self.samples)
+
+class CLIPSegDataset(torch.utils.data.Dataset):
+    """
+    Dataset for CLIPSeg fine-tuning on lung segmentation.
+    """
+    def __init__(self, root, processor, text_prompt, split='train'):
+        self.root = root
+        self.processor = processor
+        self.text_prompt = text_prompt
+        
+        # Load split CSV file
+        split_csv = os.path.join(root, 'splits', f'{split}.csv')
+        if not os.path.exists(split_csv):
+            raise FileNotFoundError(f"Split file not found: {split_csv}")
+        
+        df = pd.read_csv(split_csv)
+        
+        # Build pairs list: (image_path, mask_path)
+        self.pairs = []
+        for _, row in df.iterrows():
+            img_id = row['id']
+            cls = row['class']
+            img_path = os.path.join(root, cls, "images", f"{img_id}.png")
+            mask_path = os.path.join(root, cls, "masks", f"{img_id}.png")
+            
+            if os.path.exists(img_path) and os.path.exists(mask_path):
+                self.pairs.append((img_path, mask_path))
+    
+    def __getitem__(self, idx):
+        img_path, mask_path = self.pairs[idx]
+        
+        # Load image
+        image = Image.open(img_path).convert("RGB")
+        
+        # Load mask
+        mask = Image.open(mask_path).convert("L")
+        mask_np = np.array(mask).astype(np.float32) / 255.0  # Normalize to [0, 1]
+        
+        # Process image with text prompt
+        inputs = self.processor(
+            text=[self.text_prompt],
+            images=[image],
+            return_tensors="pt",
+            padding=True
+        )
+        
+        # Remove batch dimension
+        pixel_values = inputs['pixel_values'].squeeze(0)
+        input_ids = inputs['input_ids'].squeeze(0)
+        attention_mask = inputs['attention_mask'].squeeze(0)
+        
+        # Convert mask to tensor and resize to match CLIPSeg output size (352x352)
+        # CLIPSeg outputs 352x352 by default
+        mask_resized = torch.nn.functional.interpolate(
+            torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0),
+            size=(352, 352),
+            mode='bilinear',
+            align_corners=False
+        ).squeeze()
+        
+        return {
+            'pixel_values': pixel_values,
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': mask_resized
+        }
+    
+    def __len__(self):
+        return len(self.pairs)

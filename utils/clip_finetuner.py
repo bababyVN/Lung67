@@ -36,7 +36,7 @@ NUM_EPOCHS = 20
 LEARNING_RATE = 5e-6  # Lower LR for fine-tuning
 WARMUP_EPOCHS = 2
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SAVE_DIR = "weights/clip_models"
+SAVE_DIR = "weights/classification_models"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 print(f"Using device: {DEVICE}")
@@ -68,15 +68,6 @@ class CLIPFineTuner(nn.Module):
             self.text_features = text_outputs / text_outputs.norm(dim=-1, keepdim=True)
             
     def forward(self, images):
-        """
-        Forward pass for classification.
-        
-        Args:
-            images: Batch of PIL images or processed tensors
-            
-        Returns:
-            logits: Classification logits [batch_size, num_classes]
-        """
         # Get image features
         image_features = self.clip_model.get_image_features(pixel_values=images)
         
@@ -91,23 +82,6 @@ class CLIPFineTuner(nn.Module):
 
 
 def train_clip(model, train_dl, val_dl, device, epochs, lr, save_dir, text_prompts, classes=CLASSES):
-    """
-    Train CLIP model with combined train/validate loop (similar to helpers.py train function).
-    
-    Args:
-        model: CLIPFineTuner model
-        train_dl: Training dataloader
-        val_dl: Validation dataloader
-        device: Device to train on
-        epochs: Number of epochs
-        lr: Learning rate
-        save_dir: Directory to save checkpoints
-        text_prompts: Text prompts for each class
-        classes: List of class names
-    
-    Returns:
-        best_score: Best validation accuracy achieved
-    """
     model = model.to(device)
     criterion = nn.CrossEntropyLoss()
     
@@ -196,9 +170,9 @@ def train_clip(model, train_dl, val_dl, device, epochs, lr, save_dir, text_promp
             best_score = val_acc
             patience_counter = 0
             os.makedirs(save_dir, exist_ok=True)
-            save_path = os.path.join(save_dir, "clip_best_acc.pt")
+            save_path = os.path.join(save_dir, "CLIP_best_acc.pt")
             torch.save(model.clip_model.state_dict(), save_path)
-            print(f"✓ Saved best model: {save_path} (Acc: {val_acc:.2f}%)")
+            print(f"Saved best model: {save_path} (Acc: {val_acc:.2f}%)")
         else:
             patience_counter += 1
         
@@ -221,22 +195,6 @@ def finetune(data_root=DATA_ROOT,
              lr=LEARNING_RATE,
              save_dir=SAVE_DIR,
              device=None):
-    """
-    Main function to fine-tune CLIP model with a single call.
-    
-    Args:
-        data_root: Root directory of the dataset
-        classes: List of class names
-        text_prompts: Text descriptions for each class
-        batch_size: Batch size for training
-        epochs: Number of training epochs
-        lr: Learning rate
-        save_dir: Directory to save model checkpoints
-        device: Device to use (defaults to CUDA if available)
-    
-    Returns:
-        best_acc: Best validation accuracy achieved
-    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
